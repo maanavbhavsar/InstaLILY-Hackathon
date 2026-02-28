@@ -1,0 +1,3 @@
+# Install for fine-tuning and loading the fine-tuned agent in the app
+-r requirements.txt
+torch>=2.0.0
