@@ -47,13 +47,20 @@ def encode(examples):
     zone_to_id = {z: i for i, z in enumerate(ZONES)}
     action_to_id = {a: i for i, a in enumerate(ACTIONS)}
 
+    # Map string temperature (e.g. from industrial_safety_200.jsonl) to numeric for feature
+    def _temp_value(t):
+        if isinstance(t, (int, float)):
+            return float(t)
+        s = (t or "normal").strip().lower()
+        return {"normal": 22, "high": 28, "critical": 32, "extreme": 30}.get(s, 22)
+
     for ex in examples:
         phrase = ex["phrase"].strip().lower()
         ctx = ex.get("context", {})
         pid = phrase_to_id.get(phrase, 0)
         sid = shift_to_id.get(ctx.get("shift", "day"), 0)
         zid = zone_to_id.get(ctx.get("zone", "field"), 0)
-        temp = float(ctx.get("temperature", 22)) / 30.0
+        temp = _temp_value(ctx.get("temperature", 22)) / 30.0
         last_m = float(ctx.get("last_maintenance", 14)) / 30.0
         tickets = float(ctx.get("active_tickets", 0)) / 10.0
         workers = float(ctx.get("nearby_workers", 2)) / 10.0
@@ -103,13 +110,13 @@ def main():
     model = AgentMLP()
     opt = torch.optim.Adam(model.parameters(), lr=1e-2)
     loss_fn = nn.BCELoss()
-    for epoch in range(200):
+    for epoch in range(1000):
         opt.zero_grad()
         out = model(X_t)
         loss = loss_fn(out, y_t)
         loss.backward()
         opt.step()
-        if (epoch + 1) % 50 == 0:
+        if (epoch + 1) % 100 == 0 or epoch == 0:
             print(f"Epoch {epoch+1} loss={loss.item():.4f}")
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)

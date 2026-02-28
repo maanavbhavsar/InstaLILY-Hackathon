@@ -13,7 +13,7 @@ import cv2
 from collections import deque
 
 from fieldtalk.mouth_detection import MouthDetector
-from fieldtalk.inference import infer_phrase, MODEL
+from fieldtalk.inference import infer_phrase, MODEL, PHRASES as INDUSTRIAL_PHRASES_LIST
 from fieldtalk.agent_layer import run_agent
 from fieldtalk.context import get_environment_context
 from fieldtalk.voice import speak, get_engine
@@ -32,7 +32,7 @@ def _init_state():
     if "mouth_buffer" not in st.session_state:
         st.session_state.mouth_buffer = deque(maxlen=16)
     if "transcriptions" not in st.session_state:
-        st.session_state.transcriptions = []  # list of (phrase, confidence, ts_str)
+        st.session_state.transcriptions = []  # list of (grid_phrase, industrial_phrase, confidence, ts_str)
     if "actions" not in st.session_state:
         st.session_state.actions = []  # list of execution dicts (autonomous execution)
     if "reasoning_history" not in st.session_state:
@@ -46,6 +46,12 @@ def _init_state():
             st.session_state.tts_engine = get_engine()
         except Exception:
             st.session_state.tts_engine = None
+    if "demo_scenario" not in st.session_state:
+        st.session_state.demo_scenario = "Normal"
+    if "manual_override" not in st.session_state:
+        st.session_state.manual_override = False
+    if "manual_phrase" not in st.session_state:
+        st.session_state.manual_phrase = INDUSTRIAL_PHRASES_LIST[0] if INDUSTRIAL_PHRASES_LIST else "check"
 
 
 def _ts_str():
@@ -76,21 +82,25 @@ def live_capture():
     st.session_state.latest_frame = cv2.cvtColor(display, cv2.COLOR_BGR2RGB)
     if mouth_crop is not None and mouth_crop.size > 0:
         mouth_buffer.append(mouth_crop.copy())
-    if len(mouth_buffer) >= 16:
+    # When manual override is on, bypass lip reading; phrase is sent via sidebar "Send phrase"
+    if not st.session_state.get("manual_override", False) and len(mouth_buffer) >= 16:
         t0 = time.perf_counter()
         frames = list(mouth_buffer)
-        phrase, confidence = infer_phrase(frames, model=MODEL_NAME)
-        context = get_environment_context()
-        executions, reasoning_info = run_agent(phrase, context)
+        result = infer_phrase(frames, model=MODEL_NAME)
+        grid_phrase = result.get("grid_phrase", "unknown")
+        industrial_phrase = result.get("industrial_phrase", "check")
+        confidence = result.get("confidence", 0.0)
+        context = get_environment_context(st.session_state.get("demo_scenario"))
+        executions, reasoning_info = run_agent(industrial_phrase, context)
         st.session_state.reasoning_history.append(reasoning_info)
         if st.session_state.tts_engine:
             try:
-                speak(phrase, engine=st.session_state.tts_engine)
+                speak(industrial_phrase, engine=st.session_state.tts_engine)
             except Exception:
                 pass
         t1 = time.perf_counter()
         st.session_state.latency_ms = (t1 - t0) * 1000
-        st.session_state.transcriptions.append((phrase, confidence, _ts_str()))
+        st.session_state.transcriptions.append((grid_phrase, industrial_phrase, confidence, _ts_str()))
         for ex in executions:
             st.session_state.actions.append(ex)
         mouth_buffer.clear()
@@ -98,12 +108,114 @@ def live_capture():
     st.rerun()
 
 
+# Demo scenario colors (green / orange / red)
+SCENARIO_COLORS = {"Normal": "#22c55e", "High Risk": "#f97316", "Emergency": "#ef4444"}
+
+
 def main():
-    st.set_page_config(page_title="FieldTalk", layout="wide", initial_sidebar_state="collapsed")
+    st.set_page_config(page_title="FieldTalk", layout="wide", initial_sidebar_state="expanded")
     _init_state()
 
+    # Sidebar: demo scenario + manual phrase override
+    with st.sidebar:
+        st.subheader("Demo scenario")
+        from fieldtalk.context import DEMO_SCENARIOS
+        scenario_options = ["Normal", "High Risk", "Emergency"]
+        selected = st.selectbox(
+            "Context preset",
+            scenario_options,
+            index=scenario_options.index(st.session_state.demo_scenario) if st.session_state.demo_scenario in scenario_options else 0,
+            key="demo_scenario_select",
+        )
+        st.session_state.demo_scenario = selected
+        color = SCENARIO_COLORS.get(selected, "#6b7280")
+        st.markdown(
+            f'<span style="background: {color}; color: white; padding: 0.25rem 0.5rem; border-radius: 4px; font-weight: 600;">{selected}</span>',
+            unsafe_allow_html=True,
+        )
+        ctx = DEMO_SCENARIOS.get(selected, {})
+        st.caption(f"shift={ctx.get('shift', '—')}, temp={ctx.get('temperature', '—')}°C")
+        st.caption(f"tickets={ctx.get('active_tickets', '—')}, workers={ctx.get('nearby_workers', '—')}")
+        # One-click demo: run pipeline with scenario's canonical phrase (no webcam needed)
+        scenario_phrase = {"Normal": "confirmed", "High Risk": "need part", "Emergency": "evacuate"}.get(selected, "check")
+        if st.button("Run scenario", key="sidebar_run_scenario", help=f"Send phrase «{scenario_phrase}» and run agent + TTS"):
+            context = get_environment_context(selected)
+            executions, reasoning_info = run_agent(scenario_phrase, context)
+            st.session_state.reasoning_history.append(reasoning_info)
+            if st.session_state.tts_engine:
+                try:
+                    speak(scenario_phrase, engine=st.session_state.tts_engine)
+                except Exception:
+                    pass
+            st.session_state.transcriptions.append((f"[scenario: {selected}]", scenario_phrase, 1.0, _ts_str()))
+            for ex in executions:
+                st.session_state.actions.append(ex)
+            st.rerun()
+
+        st.markdown("---")
+        st.subheader("Controls")
+        manual_override = st.toggle("Manual phrase override", value=st.session_state.manual_override, key="sidebar_manual_override")
+        st.session_state.manual_override = manual_override
+        if manual_override:
+            phrase_options = INDUSTRIAL_PHRASES_LIST if INDUSTRIAL_PHRASES_LIST else ["check"]
+            idx = phrase_options.index(st.session_state.manual_phrase) if st.session_state.manual_phrase in phrase_options else 0
+            st.session_state.manual_phrase = st.selectbox(
+                "Industrial phrase",
+                options=phrase_options,
+                index=idx,
+                key="sidebar_manual_phrase",
+            )
+            if st.button("Send phrase", type="primary", key="sidebar_send_phrase"):
+                context = get_environment_context(st.session_state.get("demo_scenario"))
+                executions, reasoning_info = run_agent(st.session_state.manual_phrase, context)
+                st.session_state.reasoning_history.append(reasoning_info)
+                if st.session_state.tts_engine:
+                    try:
+                        speak(st.session_state.manual_phrase, engine=st.session_state.tts_engine)
+                    except Exception:
+                        pass
+                st.session_state.transcriptions.append(
+                    ("[manual]", st.session_state.manual_phrase, 1.0, _ts_str())
+                )
+                for ex in executions:
+                    st.session_state.actions.append(ex)
+                st.rerun()
+            st.markdown(
+                '<span style="color: #dc2626; font-weight: 700; font-size: 0.9rem;">MANUAL OVERRIDE</span>',
+                unsafe_allow_html=True,
+            )
+
     st.title("FieldTalk")
-    st.caption("Lip reading → Agent (phrase + context) → Autonomous execution · Offline only, zero cloud")
+    st.caption("Lip reading → GRID phrase → phrase_mapper → industrial command → Agent MLP → execution + voice · Offline only")
+    st.caption("Use the **sidebar (▶)** for Demo scenario and **Manual phrase override**.")
+
+    with st.expander("The full picture", expanded=False):
+        st.markdown("""
+```
+Webcam → MediaPipe → 16 frames
+       ↓
+Fine-tuned Gemma 3:4b (partner's model)
+       ↓
+"bin blue at f two now"   ← GRID phrase
+       ↓
+phrase_mapper.py
+       ↓
+"unit down"   ← industrial command
+       ↓
+Agent MLP + context
+       ↓
+CRITICAL alert + create ticket + notify workers
+       ↓
+pyttsx3 voice output
+```
+        """)
+
+    # Show manual override state in main area when sidebar may be collapsed
+    if st.session_state.get("manual_override"):
+        st.markdown(
+            '<span style="color: #dc2626; font-weight: 700; font-size: 0.9rem;">MANUAL OVERRIDE</span> — phrase sent from sidebar.',
+            unsafe_allow_html=True,
+        )
 
     # Control bar: Start/Stop + status
     col_btn, col_status, _ = st.columns([1, 2, 5])
@@ -144,7 +256,10 @@ def main():
 
     with col_txt:
         st.subheader("2. Phrase + context (decision)")
-        ctx = get_environment_context()
+        scenario = st.session_state.get("demo_scenario", "Normal")
+        sc_color = SCENARIO_COLORS.get(scenario, "#6b7280")
+        st.markdown(f'Scenario: <span style="background: {sc_color}; color: white; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.85rem;">{scenario}</span>', unsafe_allow_html=True)
+        ctx = get_environment_context(scenario)
         st.caption(f"Context: shift={ctx.get('shift', '—')}, zone={ctx.get('zone', '—')}, temp={ctx.get('temperature', '—')}°C, tickets={ctx.get('active_tickets', '—')}")
         if st.session_state.reasoning_history:
             last = st.session_state.reasoning_history[-1]
@@ -155,8 +270,19 @@ def main():
                 st.metric(f"Decision: {label}", f"{dm:.0f} ms")
             st.markdown(f"**Priority:** {last.get('priority', '—')}")
             st.caption(f"*Reasoning:* {last.get('reasoning', '')[:200]}{'…' if len(last.get('reasoning', '')) > 200 else ''}")
-        for phrase, conf, ts in reversed(st.session_state.transcriptions[-20:]):
-            st.markdown(f"**{phrase}** — {conf:.0%} — `{ts}`")
+        for row in reversed(st.session_state.transcriptions[-20:]):
+            if len(row) == 4:
+                grid_phrase, industrial_phrase, conf, ts = row
+            else:
+                grid_phrase = industrial_phrase = row[0] if row else "—"
+                conf = row[1] if len(row) > 1 else 0.0
+                ts = row[2] if len(row) > 2 else ""
+            st.caption(f"Detected: {grid_phrase}")
+            st.markdown(
+                f'<span style="color: #22c55e; font-size: 1.25rem; font-weight: 700;">Command: {industrial_phrase.upper()}</span>',
+                unsafe_allow_html=True,
+            )
+            st.caption(f"{conf:.0%} — `{ts}`")
         if not st.session_state.transcriptions:
             st.info("Phrase + context → agent decides actions. Fine-tuned MLP &lt;100ms; base LLM 8–12s.")
         with st.expander("What did fine-tuning improve?"):
