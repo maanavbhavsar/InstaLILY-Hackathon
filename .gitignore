@@ -9,4 +9,19 @@ wheels/
 # Virtual environments
 .venv
 
+# OS files
 .DS_Store
+__MACOSX/
+
+# GRID corpus data (large, downloaded via pipeline)
+data/grid/
+data/grid_dataset_*.jsonl
+
+# Training outputs
+models/gemma3n-lipreader-lora/
+training/checkpoints/
+output*/
+
+# Misc
+*.tar
+*.zip
