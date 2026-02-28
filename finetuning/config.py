@@ -74,7 +74,24 @@ TEST_RATIO = 0.1
 SPLIT_SEED = 42
 
 # -- Prompt (must match at inference time) --
+_VOCAB_STR = (
+    "Commands: bin, lay, place, set | "
+    "Colors: blue, green, red, white | "
+    "Prepositions: at, by, in, with | "
+    "Letters: a-z (except w) | "
+    "Digits: zero, one, two, three, four, five, six, seven, eight, nine | "
+    "Adverbs: again, now, please, soon"
+)
+
+LIP_READING_SYSTEM_PROMPT = (
+    "You are a lip reading transcription system. "
+    "Output ONLY the spoken words, nothing else. "
+    "No explanations, no punctuation, no formatting. "
+    "The sentence is always 6 words in the format: "
+    "<command> <color> <preposition> <letter> <digit> <adverb>. "
+    f"Vocabulary: {_VOCAB_STR}"
+)
 LIP_READING_PROMPT = (
-    "These frames show a sequence of lip movements from left to right, "
-    "top to bottom. Transcribe the spoken phrase."
+    "Read the lips in this mosaic of frames (left to right, top to bottom). "
+    "Output only the 6 spoken words."
 )

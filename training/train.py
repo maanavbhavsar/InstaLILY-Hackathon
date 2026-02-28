@@ -77,7 +77,7 @@ def main():
         sys.exit(1)
 
     gpu_name = torch.cuda.get_device_name(0)
-    vram_gb = torch.cuda.get_device_properties(0).total_mem / 1e9
+    vram_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
     logger.info(f"GPU: {gpu_name} ({vram_gb:.1f} GB VRAM)")
 
     # Load model
@@ -135,36 +135,110 @@ def main():
         dataset_kwargs={"skip_prepare_dataset": True},
     )
 
+    # Find the token sequence that marks the start of the model's response
+    # For Gemma, this is "<start_of_turn>model\n"
+    _model_turn_marker = processor.tokenizer.encode(
+        "<start_of_turn>model\n", add_special_tokens=False
+    )
+    logger.info(
+        f"Model turn marker tokens: {_model_turn_marker} "
+        f"(decoded: {processor.tokenizer.decode(_model_turn_marker)!r})"
+    )
+
+    def _extract_image(msgs):
+        """Extract PIL image from message content, handling various formats."""
+        for msg in msgs:
+            if msg.get("role") == "system":
+                continue
+            content = msg.get("content", [])
+            if not isinstance(content, list):
+                continue
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "image":
+                    return item["image"]
+                if hasattr(item, "convert"):
+                    return item
+        return None
+
+    def _find_response_start(input_ids):
+        """Find where the assistant response starts in token sequence."""
+        marker = _model_turn_marker
+        ids_list = input_ids.tolist()
+        for i in range(len(ids_list) - len(marker) + 1):
+            if ids_list[i : i + len(marker)] == marker:
+                return i + len(marker)
+        # Fallback: don't mask anything (shouldn't happen)
+        logger.warning("Could not find model turn marker in tokens!")
+        return 0
+
     # Collation function for multimodal data
+    # Process each example individually, masking prompt tokens in labels
     def collate_fn(examples):
-        texts = []
-        images = []
+        all_input_ids = []
+        all_attention_mask = []
+        all_labels = []
+        extra_keys = {}
+
         for example in examples:
             msgs = example["messages"]
-            # Apply chat template
+            image = _extract_image(msgs)
+
+            # Tokenize full conversation (user + assistant)
             text = processor.apply_chat_template(
                 msgs, add_generation_prompt=False, tokenize=False
             )
-            texts.append(text)
-            # Extract image from user message
-            for item in msgs[0]["content"]:
-                if isinstance(item, dict) and item.get("type") == "image":
-                    images.append(item["image"])
+            inputs = processor(
+                text=[text],
+                images=[image] if image is not None else None,
+                return_tensors="pt",
+                padding=False,
+                truncation=True,
+            )
 
-        batch = processor(
-            text=texts,
-            images=images if images else None,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-        )
+            input_ids = inputs["input_ids"].squeeze(0)
+            attention_mask = inputs["attention_mask"].squeeze(0)
 
-        # Set labels = input_ids for causal LM training
-        labels = batch["input_ids"].clone()
-        # Mask padding tokens in labels
-        if processor.tokenizer.pad_token_id is not None:
-            labels[labels == processor.tokenizer.pad_token_id] = -100
-        batch["labels"] = labels
+            # Create labels: mask everything before the assistant response
+            labels = input_ids.clone()
+            response_start = _find_response_start(input_ids)
+            labels[:response_start] = -100
+
+            all_input_ids.append(input_ids)
+            all_attention_mask.append(attention_mask)
+            all_labels.append(labels)
+
+            # Collect extra keys (pixel_values, image_sizes, etc.)
+            for k, v in inputs.items():
+                if k not in ("input_ids", "attention_mask"):
+                    if k not in extra_keys:
+                        extra_keys[k] = []
+                    extra_keys[k].append(v.squeeze(0) if hasattr(v, "squeeze") else v)
+
+        # Pad sequences
+        max_len = max(ids.shape[0] for ids in all_input_ids)
+        pad_id = processor.tokenizer.pad_token_id or 0
+
+        padded_input_ids = []
+        padded_attention_mask = []
+        padded_labels = []
+        for ids, mask, labels in zip(all_input_ids, all_attention_mask, all_labels):
+            pad_len = max_len - ids.shape[0]
+            padded_input_ids.append(torch.cat([ids, torch.full((pad_len,), pad_id, dtype=ids.dtype)]))
+            padded_attention_mask.append(torch.cat([mask, torch.zeros(pad_len, dtype=mask.dtype)]))
+            padded_labels.append(torch.cat([labels, torch.full((pad_len,), -100, dtype=labels.dtype)]))
+
+        batch = {
+            "input_ids": torch.stack(padded_input_ids),
+            "attention_mask": torch.stack(padded_attention_mask),
+            "labels": torch.stack(padded_labels),
+        }
+
+        # Stack extra tensors
+        for k, v_list in extra_keys.items():
+            try:
+                batch[k] = torch.stack(v_list)
+            except Exception:
+                batch[k] = v_list
 
         return batch
 

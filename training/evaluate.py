@@ -31,6 +31,7 @@ from finetuning.config import (
     DATASET_DIR,
     ADAPTER_DIR,
     LIP_READING_PROMPT,
+    LIP_READING_SYSTEM_PROMPT,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,9 +51,16 @@ def load_test_samples(dataset_dir: Path, max_samples: int | None = None) -> list
             if not line.strip():
                 continue
             data = json.loads(line)
-            image_path = data["messages"][0]["content"][0]["image"]
-            transcription = data["messages"][1]["content"]
-            samples.append({"image_path": image_path, "transcription": transcription})
+            # Find user and assistant messages (format may have system msg first)
+            image_path = None
+            transcription = None
+            for msg in data["messages"]:
+                if msg["role"] == "user":
+                    image_path = msg["content"][0]["image"]
+                elif msg["role"] == "assistant":
+                    transcription = msg["content"]
+            if image_path and transcription:
+                samples.append({"image_path": image_path, "transcription": transcription})
 
     if max_samples is not None:
         samples = samples[:max_samples]
@@ -109,8 +117,14 @@ def evaluate(
         image = Image.open(sample["image_path"]).convert("RGB")
         reference = sample["transcription"]
 
-        # Build chat input
+        # Build chat input (must match training format)
         messages = [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": LIP_READING_SYSTEM_PROMPT},
+                ],
+            },
             {
                 "role": "user",
                 "content": [
@@ -132,13 +146,15 @@ def evaluate(
         with torch.no_grad():
             output_ids = model.generate(
                 **inputs,
-                max_new_tokens=50,
+                max_new_tokens=20,
                 do_sample=False,
             )
 
         # Decode only the generated tokens
         generated_ids = output_ids[0][inputs["input_ids"].shape[1]:]
         prediction = processor.decode(generated_ids, skip_special_tokens=True).strip()
+        # Take only the first line (model sometimes generates multiple sentences)
+        prediction = prediction.split("\n")[0].strip()
 
         predictions.append(prediction)
         references.append(reference)
@@ -160,7 +176,7 @@ def evaluate(
             logger.info(f"  Evaluated {idx+1}/{len(samples)} samples")
 
         # Show first few predictions
-        if idx < 5:
+        if idx < 20:
             match = "OK" if prediction == reference else "MISS"
             print(f"  [{match}] ref='{reference}' pred='{prediction}'")
 

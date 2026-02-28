@@ -553,6 +553,58 @@ The adapter is lightweight (~10-50MB): just `adapter_model.safetensors` + `adapt
 
 ---
 
+## Implementation Status
+
+All components have been built and tested end-to-end.
+
+### Phase 1: Data Pipeline — COMPLETE
+
+| Step | Module | Status | Notes |
+|------|--------|--------|-------|
+| Config | `finetuning/config.py` | Done | All constants, paths, model params, vocabulary |
+| Download | `finetuning/download_grid.py` | Done | Zenodo download with retry/resume, dry-run, local-path modes |
+| Extract Frames | `finetuning/extract_frames.py` | Done | Parallel video→PNG extraction via OpenCV |
+| Extract Mouth ROIs | `finetuning/extract_mouth_rois.py` | Done | MediaPipe Face Mesh, same landmarks as live app |
+| Parse Alignments | `finetuning/parse_alignments.py` | Done | .align → speech boundaries + transcription |
+| Build Mosaics | `finetuning/build_mosaics.py` | Done | 12-frame sampling → 3×4 grid (400×240 JPEG) |
+| Format Dataset | `finetuning/format_dataset.py` | Done | JSONL with train/val/test splits |
+| Validate Dataset | `finetuning/validate_dataset.py` | Done | Dimensions, vocabulary, duplicates checks |
+| Run Pipeline | `finetuning/run_pipeline.py` | Done | Orchestrates all steps with --start-from and --limit |
+
+### Phase 2: Training Pipeline — READY (needs GPU)
+
+| Step | Module | Status | Notes |
+|------|--------|--------|-------|
+| Requirements | `training/requirements.txt` | Done | torch, transformers, trl, peft, bitsandbytes, etc. |
+| Setup | `training/setup_env.sh` | Done | CUDA verification, HuggingFace login |
+| Dataset Loader | `training/dataset.py` | Done | Loads JSONL + images for SFTTrainer |
+| Training | `training/train.py` | Done | LoRA fine-tuning with SFTTrainer on Gemma 3n E4B |
+| Evaluation | `training/evaluate.py` | Done | WER, sentence accuracy, per-position accuracy |
+
+### Tested Pipeline Run (s1 speaker, 1000 videos)
+
+Full pipeline run on speaker s1 completed successfully in ~6.5 minutes:
+
+| Step | Result | Time |
+|------|--------|------|
+| Download | 1000 videos (403.9 MB) + 34000 alignments (19.2 MB) | ~25s |
+| Frames | 74,995 frames from 1,000 videos (75 frames/video) | 47.6s |
+| Mouth ROIs | 74,855/74,995 frames (99.8% face detection rate) | 347.6s |
+| Mosaics | 1,000/1,000 built, 0 skipped | 0.8s |
+| Format | train=800, val=100, test=100 | <0.1s |
+| Validate | All 1,000 samples passed (correct dims, valid vocabulary, no duplicates) | 0.3s |
+
+Only 1 video (`pbio7a`) had a low face detection rate (64%), but the mosaic still built.
+
+### Environment Notes
+
+- **Python:** 3.10+ required
+- **OpenCV:** Use `opencv-python-headless` (not `opencv-python`) on servers without libGL
+- **MediaPipe:** Version 0.10.14 required for the `solutions` API (0.10.32+ removed it). After installing mediapipe, uninstall `opencv-contrib-python` and install `opencv-python-headless`
+- **Gemma access:** Gemma 3n E4B is a gated model — accept the license on HuggingFace and run `huggingface-cli login` before training
+
+---
+
 ## Quick Reference: Full Pipeline Commands
 
 ```bash

@@ -49,31 +49,48 @@ def load_dataset(
     for sample in raw_samples:
         try:
             msgs = sample["messages"]
-            user_content = msgs[0]["content"]
+
+            # Find user and assistant messages (may have system message first)
+            system_msg = None
+            user_msg = None
+            assistant_msg = None
+            for msg in msgs:
+                if msg["role"] == "system":
+                    system_msg = msg
+                elif msg["role"] == "user":
+                    user_msg = msg
+                elif msg["role"] == "assistant":
+                    assistant_msg = msg
+
+            if user_msg is None or assistant_msg is None:
+                continue
+
+            user_content = user_msg["content"]
 
             # Load image
             image_path = user_content[0]["image"]
             image = Image.open(image_path).convert("RGB")
             prompt_text = user_content[1]["text"]
-            transcription = msgs[1]["content"]
+            transcription = assistant_msg["content"]
 
-            processed.append({
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "image", "image": image},
-                            {"type": "text", "text": prompt_text},
-                        ],
-                    },
-                    {
-                        "role": "assistant",
-                        "content": [
-                            {"type": "text", "text": transcription},
-                        ],
-                    },
-                ]
+            out_msgs = []
+            if system_msg is not None:
+                out_msgs.append(system_msg)
+            out_msgs.append({
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": image},
+                    {"type": "text", "text": prompt_text},
+                ],
             })
+            out_msgs.append({
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": transcription},
+                ],
+            })
+
+            processed.append({"messages": out_msgs})
         except Exception as e:
             logger.warning(f"Failed to load sample: {e}")
             continue

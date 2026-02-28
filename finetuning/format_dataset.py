@@ -38,6 +38,7 @@ from .config import (
     DATASET_DIR,
     DEFAULT_SPEAKERS,
     LIP_READING_PROMPT,
+    LIP_READING_SYSTEM_PROMPT,
     TRAIN_RATIO,
     VAL_RATIO,
     SPLIT_SEED,
@@ -74,6 +75,12 @@ def build_samples(
 
         sample = {
             "messages": [
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": LIP_READING_SYSTEM_PROMPT},
+                    ],
+                },
                 {
                     "role": "user",
                     "content": [
