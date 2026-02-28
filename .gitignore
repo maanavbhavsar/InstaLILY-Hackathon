@@ -8,3 +8,33 @@ wheels/
 
 # Virtual environments
 .venv
+venv/
+env/
+
+# Model files (large; regenerate or copy from VM)
+*.gguf
+*.tar.gz
+fieldtalk_agent_gguf_gguf/
+fieldtalk_agent_gguf_gguf.tar.gz
+models/
+*.pt
+*.bin
+*.safetensors
+
+# Environment / secrets
+.env
+.env.local
+.streamlit/secrets.toml
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

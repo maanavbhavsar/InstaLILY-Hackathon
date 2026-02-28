@@ -10,13 +10,13 @@ os.environ.setdefault("OLLAMA_HOST", "http://127.0.0.1:11434")
 import ollama
 from typing import Any
 
-# Model for decision layer (not lip reading). Gemma 3 for contextual reasoning.
+# Model for decision layer. Use base Gemma or merged GGUF loaded in Ollama (see README).
+# Example: AGENT_MODEL=fieldtalk-agent after `ollama create -f Modelfile`
 AGENT_MODEL = os.getenv("AGENT_MODEL", "gemma3:4b")
-# Timeout (seconds) for Ollama call so app doesn't hang if model is slow/missing
 AGENT_TIMEOUT = int(os.getenv("AGENT_TIMEOUT", "30"))
 
-# Known tool names the LLM can choose; we map these to actual functions
-KNOWN_ACTIONS = {"trigger_alert", "create_ticket", "query_inventory", "log_confirmation"}
+# Known tool names the LLM can choose (including notify_workers from 200-example training).
+KNOWN_ACTIONS = {"trigger_alert", "create_ticket", "query_inventory", "log_confirmation", "notify_workers"}
 ACTIONS_LIST = ["trigger_alert", "create_ticket", "query_inventory", "log_confirmation"]
 
 # Optional fine-tuned model (script: scripts/finetune_agent.py). Auto-use if path unset but default exists.

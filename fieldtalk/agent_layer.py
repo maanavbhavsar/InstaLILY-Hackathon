@@ -42,11 +42,13 @@ def log_confirmation(context: dict[str, Any]) -> dict[str, Any]:
     return {"action": "log_confirmation", "status": "executed", "message": msg, "timestamp": _ts()}
 
 
+# notify_workers (from 200-example Gemma training) runs as trigger_alert
 _TOOL_MAP = {
     "trigger_alert": trigger_alert,
     "create_ticket": create_ticket,
     "query_inventory": query_inventory,
     "log_confirmation": log_confirmation,
+    "notify_workers": trigger_alert,
 }
 
 

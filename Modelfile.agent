@@ -1,0 +1,14 @@
+# FieldTalk agent: load the GGUF from VM (fieldtalk_agent_gguf_gguf folder).
+# After copying from VM and unpacking: ollama create fieldtalk-agent -f Modelfile.agent
+# Then: $env:AGENT_MODEL = "fieldtalk-agent"; python -m streamlit run app.py
+
+FROM ./fieldtalk_agent_gguf_gguf/gemma-3-4b-it.Q4_K_M.gguf
+
+PARAMETER temperature 0.1
+PARAMETER num_ctx 512
+
+SYSTEM """You are an autonomous industrial safety agent. Reply with:
+PRIORITY: <high|medium|low>
+ACTIONS: <comma-separated: trigger_alert, create_ticket, query_inventory, log_confirmation, notify_workers, or NONE>
+REASONING: <short explanation>
+"""

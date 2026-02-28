@@ -2,10 +2,31 @@
 
 On-device lip reading industrial communication agent. **Zero cloud support — runs fully offline and independent.** All inference and execution are local; no API calls, no external services.
 
-**End-to-end flow:**
-1. **Lip reading (simple, minimal)** — Webcam → face/mouth crop → vision model → phrase + confidence.
-2. **Agent reasons (phrase + context)** — Gemma 3 (or Gemma 3n) reasons over the phrase and full environment (zone, shift, temperature, tickets, etc.) and decides which actions to take. Not a lookup table.
-3. **Autonomous execution** — The same tools run (alert, ticket, inventory, log), but the *decision* comes from the LLM. Results and reasoning are shown with timestamps.
+## The full picture
+
+```
+Webcam → MediaPipe → 16 frames
+       ↓
+Fine-tuned Gemma 3:4b (vision / partner's model)
+       ↓
+"bin blue at f two now"   ← GRID phrase
+       ↓
+phrase_mapper.py
+       ↓
+"unit down"   ← industrial command
+       ↓
+Agent MLP + context
+       ↓
+CRITICAL alert + create ticket + notify workers
+       ↓
+pyttsx3 voice output
+```
+
+**End-to-end flow (summary):**
+1. **Lip reading** — Webcam → MediaPipe mouth region → 16 frames → fine-tuned Gemma 3:4b → GRID-style phrase.
+2. **GRID → industrial** — `phrase_mapper.py` maps GRID words to field commands (e.g. *bin* → *unit down*, *blue* → *urgent*).
+3. **Agent** — Fine-tuned MLP + context decides actions (alert, ticket, inventory, log). Sub-100ms.
+4. **Execution + voice** — Tools run; pyttsx3 speaks the industrial command.
 
 ## Offline / no cloud
 
@@ -99,6 +120,45 @@ That *is* the fine-tuning story: **speed + determinism** for safety-critical dec
 > *"We fine-tuned a lightweight decision model for sub-100ms autonomous action selection in safety-critical environments. The base LLM handles complex reasoning. The fine-tuned model handles time-critical execution. That's the production architecture — fast where speed matters, intelligent where reasoning matters."*
 
 The app shows **Decision: Fine-tuned MLP — X ms** (or **Base Gemma 3 — X ms**) in the UI so judges see the difference live.
+
+#### Wire merged Gemma into Ollama (GGUF — clean demo story)
+
+**Full steps (VM → GGUF → Ollama → app):** see **[docs/SETUP_FINETUNED_AGENT.md](docs/SETUP_FINETUNED_AGENT.md)** — understanding agent setup and where the partner’s GRID lip-reading model plugs in (`MODEL`).
+
+After fine-tuning with `finetune_gemma_agent.py`, you get a merged model and (optionally) a GGUF. To use the **merged Gemma** as the agent in the app:
+
+1. **Create Ollama model from GGUF** (from project root):
+   ```powershell
+   # If fieldtalk_agent_gguf/ contains a single .gguf, Ollama may accept the folder.
+   # Otherwise list the dir and set FROM in Modelfile.agent to the exact file.
+   ollama create fieldtalk-agent -f Modelfile.agent
+   ```
+2. **Point the app at it**:
+   ```powershell
+   $env:AGENT_MODEL = "fieldtalk-agent"
+   python -m streamlit run app.py
+   ```
+   `reasoning.py` uses `AGENT_MODEL` for the Ollama chat; when it’s your custom model name, the **merged Gemma** is the decision layer.
+
+#### 200-example retrain (e.g. on a VM)
+
+Use the industrial safety 200-example set for training:
+
+```powershell
+# Optional: explicit path
+$env:FIELDTALK_AGENT_DATA = "industrial_safety_200.jsonl"
+python finetune_gemma_agent.py
+```
+
+If `industrial_safety_200.jsonl` is in the project root, the script picks it automatically when `FIELDTALK_AGENT_DATA` is not set. Then export to GGUF and load in Ollama as above. The 200-example data includes `notify_workers`; the app maps it to `trigger_alert`.
+
+---
+
+### Rehearse ×3 — win the presentation
+
+1. **Run the app** with vision model + agent (MLP or merged Gemma) and confirm webcam → phrase → command → actions → voice.
+2. **Use the sidebar**: pick **Demo scenario** (e.g. Emergency), click **Run scenario** to drive the pipeline without lip reading; use **Manual phrase override** if something fails.
+3. **Rehearse the full flow at least 3 times** (webcam once, Run scenario once, manual override once) so the demo is bulletproof.
 
 ## Requirements
 

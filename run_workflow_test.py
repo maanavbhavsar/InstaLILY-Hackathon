@@ -56,8 +56,11 @@ def test_inference_skip_if_no_ollama():
     # Build minimal 16-frame list (tiny mouth crops)
     frames = [np.zeros((32, 32, 3), dtype=np.uint8)] * 16
     try:
-        phrase, conf = infer_phrase(frames, model=MODEL)
-        print(f"   OK: infer_phrase returned phrase={phrase!r}, conf={conf}")
+        out = infer_phrase(frames, model=MODEL)
+        grid = out.get("grid_phrase", "")
+        ind = out.get("industrial_phrase", "")
+        conf = out.get("confidence", 0)
+        print(f"   OK: infer_phrase returned grid={grid!r} -> industrial={ind!r}, conf={conf}")
     except Exception as e:
         print(f"   SKIP (Ollama not available): {e}")
 
