@@ -7,6 +7,7 @@ env/
 *.gguf
 *.tar.gz
 fieldtalk_agent_gguf_gguf/
+fieldtalk_lipreader_gguf/
 fieldtalk_agent_gguf_gguf.tar.gz
 models/
 *.pt
@@ -33,6 +34,13 @@ data/grid_dataset_*.jsonl
 .DS_Store
 Thumbs.db
 __MACOSX/
+
+# Python
+__pycache__/
+*.pyc
+
+# uv
+uv.lock
 
 # Logs and Archives
 *.log
