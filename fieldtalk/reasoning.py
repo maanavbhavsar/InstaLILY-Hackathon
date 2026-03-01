@@ -1,6 +1,10 @@
 """
-LLM-based agent reasoning: Gemma 3 reasons over phrase + context and decides
+LLM-based agent reasoning: Gemma 3:4b reasons over phrase + context and decides
 which actions to take. This is what separates a rule-based system from a genuine agent.
+
+Priority order:
+  1. Base Gemma 3:4b via Ollama — real LLM reasoning with structured output
+  2. Hardcoded fallback — simple phrase→action mapping when LLM is unavailable
 """
 import os
 import re
@@ -10,87 +14,13 @@ os.environ.setdefault("OLLAMA_HOST", "http://127.0.0.1:11434")
 import ollama
 from typing import Any
 
-# Model for decision layer. Use base Gemma or merged GGUF loaded in Ollama (see README).
-# Example: AGENT_MODEL=fieldtalk-agent after `ollama create -f Modelfile`
+# Model for decision layer: base Gemma 3:4b via Ollama (local, no cloud).
 AGENT_MODEL = os.getenv("AGENT_MODEL", "gemma3:4b")
-AGENT_TIMEOUT = int(os.getenv("AGENT_TIMEOUT", "30"))
+AGENT_TIMEOUT = int(os.getenv("AGENT_TIMEOUT", "120"))
 
 # Known tool names the LLM can choose (including notify_workers from 200-example training).
 KNOWN_ACTIONS = {"trigger_alert", "create_ticket", "query_inventory", "log_confirmation", "notify_workers"}
 ACTIONS_LIST = ["trigger_alert", "create_ticket", "query_inventory", "log_confirmation"]
-
-# Optional fine-tuned model (script: scripts/finetune_agent.py). Auto-use if path unset but default exists.
-_default_finetuned = os.path.join(os.path.dirname(os.path.dirname(__file__)), "models", "finetuned_agent.pt")
-FINE_TUNED_AGENT_PATH = os.getenv("FINE_TUNED_AGENT_PATH", "").strip() or (_default_finetuned if os.path.isfile(_default_finetuned) else "")
-_finetuned_model = None
-_finetuned_vocabs = None
-
-
-def _load_finetuned():
-    global _finetuned_model, _finetuned_vocabs
-    if _finetuned_model is not None or not FINE_TUNED_AGENT_PATH or not os.path.isfile(FINE_TUNED_AGENT_PATH):
-        return _finetuned_model is not None
-    try:
-        import torch
-        try:
-            ckpt = torch.load(FINE_TUNED_AGENT_PATH, map_location="cpu", weights_only=True)
-        except TypeError:
-            ckpt = torch.load(FINE_TUNED_AGENT_PATH, map_location="cpu")
-    except Exception:
-        return False
-    try:
-        from torch import nn
-        class AgentMLP(nn.Module):
-            def __init__(self):
-                super().__init__()
-                self.net = nn.Sequential(
-                    nn.Linear(7, 32), nn.ReLU(), nn.Linear(32, 16), nn.ReLU(), nn.Linear(16, 4), nn.Sigmoid()
-                )
-            def forward(self, x):
-                return self.net(x)
-        _finetuned_model = AgentMLP()
-        _finetuned_model.load_state_dict(ckpt["model_state"])
-        _finetuned_model.eval()
-        _finetuned_vocabs = ckpt.get("vocabs")
-        return True
-    except Exception:
-        return False
-
-
-def _encode_for_finetuned(phrase: str, context: dict[str, Any]) -> list[float]:
-    """Encode (phrase, context) as 7-dim vector for the fine-tuned MLP."""
-    PHRASES = [
-        "stop", "start", "help", "urgent", "clear", "confirmed", "negative",
-        "hold", "proceed", "done", "unit down", "need part", "all clear",
-        "stand by", "roger", "repeat", "abort", "ready", "check", "evacuate",
-    ]
-    SHIFTS, ZONES = ["day", "swing", "night"], ["field"]
-    phrase_to_id = {p: i for i, p in enumerate(PHRASES)}
-    shift_to_id = {s: i for i, s in enumerate(SHIFTS)}
-    zone_to_id = {z: i for i, z in enumerate(ZONES)}
-    pid = phrase_to_id.get(phrase.strip().lower(), 0)
-    sid = shift_to_id.get(context.get("shift", "day"), 0)
-    zid = zone_to_id.get(context.get("zone", "field"), 0)
-    temp = float(context.get("temperature", 22)) / 30.0
-    last_m = float(context.get("last_maintenance", 14)) / 30.0
-    tickets = float(context.get("active_tickets", 0)) / 10.0
-    workers = float(context.get("nearby_workers", 2)) / 10.0
-    return [float(pid), float(sid), float(zid), temp, last_m, tickets, workers]
-
-
-def _predict_actions_finetuned(phrase: str, context: dict[str, Any]) -> list[str]:
-    """Return list of action names from the fine-tuned model if loaded."""
-    if not _load_finetuned() or _finetuned_model is None:
-        return []
-    try:
-        import torch
-        x = torch.tensor([_encode_for_finetuned(phrase, context)], dtype=torch.float32)
-        with torch.no_grad():
-            out = _finetuned_model(x)
-        out = out[0].tolist()
-        return [ACTIONS_LIST[i] for i in range(4) if out[i] >= 0.5]
-    except Exception:
-        return []
 
 
 def _build_prompt(phrase: str, context: dict[str, Any]) -> str:
@@ -131,20 +61,9 @@ def _ollama_chat_with_timeout(model: str, messages: list, timeout_sec: int) -> d
 
 def agent_reason(phrase: str, context: dict[str, Any], model: str | None = None) -> dict[str, Any]:
     """
-    LLM or fine-tuned model reasons over phrase + context and returns priority, actions, reasoning.
-    When FINE_TUNED_AGENT_PATH is set, the fine-tuned component is used for actions.
+    Gemma 3:4b reasons over phrase + context and returns priority, actions, reasoning.
+    Falls back to hardcoded phrase→action mapping if the LLM is unavailable or times out.
     """
-    # Prefer fine-tuned model when available: sub-100ms, deterministic (safety-critical)
-    actions_ft = _predict_actions_finetuned(phrase, context)
-    if actions_ft:
-        return {
-            "priority": "medium",
-            "actions": actions_ft,
-            "reasoning": "Fine-tuned agent decision (trained on synthetic phrase+context→actions). Sub-100ms for safety-critical execution.",
-            "raw": "",
-            "source": "finetuned",
-        }
-
     model = model or AGENT_MODEL
     prompt = _build_prompt(phrase, context)
     try:
@@ -155,9 +74,9 @@ def agent_reason(phrase: str, context: dict[str, Any], model: str | None = None)
             return {
                 "priority": "medium",
                 "actions": _fallback_actions(phrase),
-                "reasoning": "LLM timeout; using fallback.",
+                "reasoning": "LLM timeout; using hardcoded fallback.",
                 "raw": "",
-                "source": "llm",
+                "source": "fallback",
             }
         text = (response.get("message") or {}).get("content", "") or ""
         out = _parse_reasoning_response(text, phrase)
@@ -167,9 +86,9 @@ def agent_reason(phrase: str, context: dict[str, Any], model: str | None = None)
         return {
             "priority": "medium",
             "actions": _fallback_actions(phrase),
-            "reasoning": f"LLM unavailable ({e}); using fallback.",
+            "reasoning": f"LLM unavailable ({e}); using hardcoded fallback.",
             "raw": "",
-            "source": "llm",
+            "source": "fallback",
         }
 
 

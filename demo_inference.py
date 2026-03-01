@@ -1,6 +1,8 @@
 """
 Demo inference script: process a video file and get a GRID lip-reading
-transcription from a fine-tuned Gemma 3 4B GGUF served by Ollama.
+transcription from a fine-tuned Gemma 3 4B GGUF served by Ollama,
+then optionally run the full agentic pipeline (phrase mapping → context →
+reasoning → autonomous execution → TTS voice).
 
 Reuses the same preprocessing (mouth ROI extraction, 3x4 mosaic) as the
 training pipeline so the model sees exactly what it was trained on.
@@ -10,6 +12,11 @@ Usage:
     python demo_inference.py --video path/to/demo.mp4 --model fieldtalk-lipreader
     python demo_inference.py --video demo.mp4 --align demo.align
     python demo_inference.py --video demo.mp4 --save-mosaic mosaic.jpg
+
+    # Full end-to-end with agentic behaviour:
+    python demo_inference.py --video demo.mp4 --agent
+    python demo_inference.py --video demo.mp4 --agent --scenario Emergency
+    python demo_inference.py --video demo.mp4 --agent --scenario "High Risk" --speak
 """
 from __future__ import annotations
 
@@ -125,6 +132,22 @@ def main():
         default=None,
         help="Save the mosaic image to this path for inspection",
     )
+    parser.add_argument(
+        "--agent",
+        action="store_true",
+        help="Run full agentic pipeline: phrase mapping → context → reasoning → execution → TTS",
+    )
+    parser.add_argument(
+        "--scenario",
+        default="Normal",
+        choices=["Normal", "High Risk", "Emergency"],
+        help="Demo scenario for agent context (default: Normal)",
+    )
+    parser.add_argument(
+        "--speak",
+        action="store_true",
+        help="Speak the industrial command via TTS (requires --agent)",
+    )
     args = parser.parse_args()
 
     # 1. Extract all frames from video
@@ -182,15 +205,78 @@ def main():
         cv2.imwrite(args.save_mosaic, mosaic, [cv2.IMWRITE_JPEG_QUALITY, 95])
         print(f"  Mosaic saved to: {args.save_mosaic}")
 
-    # 6. Send to Ollama
+    # 6. Send to Ollama (lip reading)
     print(f"Running inference with model '{args.model}'...")
     transcription = run_ollama(mosaic, args.model)
+
+    # Unload the lip-reader model to free memory before agent reasoning
+    if args.agent:
+        print(f"Unloading lip-reader model '{args.model}'...")
+        try:
+            ollama.generate(model=args.model, prompt="", keep_alive=0)
+        except Exception:
+            pass
 
     print()
     print(f"Transcription: {transcription}")
 
     if args.align:
         print(f"Ground truth:  {align_info.transcription}")
+
+    # 7. Agentic pipeline (optional)
+    if args.agent:
+        import time
+        from fieldtalk.phrase_mapper import map_to_industrial
+        from fieldtalk.context import get_environment_context
+        from fieldtalk.agent_layer import run_agent
+
+        industrial_phrase = map_to_industrial(transcription)
+
+        print()
+        print("=" * 60)
+        print("  AGENTIC PIPELINE")
+        print("=" * 60)
+        print(f"  GRID transcription : {transcription}")
+        print(f"  Industrial command : {industrial_phrase.upper()}")
+
+        context = get_environment_context(args.scenario)
+        print(f"  Scenario           : {args.scenario}")
+        print(f"    shift={context.get('shift')}, zone={context.get('zone')}, "
+              f"temp={context.get('temperature')}°C, "
+              f"workers={context.get('nearby_workers')}, "
+              f"tickets={context.get('active_tickets')}")
+
+        print()
+        print("  Running agent reasoning...")
+        t0 = time.perf_counter()
+        executions, reasoning_info = run_agent(industrial_phrase, context)
+        total_ms = (time.perf_counter() - t0) * 1000
+
+        source = reasoning_info.get("source", "llm")
+        label = "Gemma 3:4b (LLM)" if source == "llm" else "Hardcoded fallback"
+        print(f"  Decision engine    : {label}")
+        print(f"  Decision time      : {reasoning_info.get('decision_ms', total_ms):.0f} ms")
+        print(f"  Priority           : {reasoning_info.get('priority', '—').upper()}")
+        print(f"  Reasoning          : {reasoning_info.get('reasoning', '—')}")
+
+        print()
+        if executions:
+            print(f"  Autonomous actions ({len(executions)}):")
+            for ex in executions:
+                print(f"    -> {ex.get('action')}: {ex.get('message')} [{ex.get('timestamp')}]")
+        else:
+            print("  No autonomous actions triggered.")
+
+        if args.speak:
+            try:
+                from fieldtalk.voice import speak
+                print()
+                print(f"  Speaking: \"{industrial_phrase}\"")
+                speak(industrial_phrase)
+            except Exception as e:
+                print(f"  TTS failed: {e}")
+
+        print("=" * 60)
 
 
 if __name__ == "__main__":

@@ -8,7 +8,8 @@
 # Example:
 #   FROM ./fieldtalk_lipreader_gguf/unsloth.Q8_0.gguf
 
-FROM ./fieldtalk_lipreader_gguf/gemma3-lipreader-Q4_K_M.gguf
+FROM ./fieldtalk_lipreader_gguf_v2/gemma3-lipreader-Q4_K_M.gguf
+ADAPTER ./fieldtalk_lipreader_gguf_v2/mmproj-gemma3-lipreader-f16.gguf
 
 PARAMETER temperature 0.1
 PARAMETER top_p 0.9

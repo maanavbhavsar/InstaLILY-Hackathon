@@ -266,7 +266,7 @@ pyttsx3 voice output
             src = last.get("source", "llm")
             dm = last.get("decision_ms")
             if dm is not None:
-                label = "Fine-tuned MLP" if src == "finetuned" else "Base Gemma 3"
+                label = "Gemma 3:4b (LLM)" if src == "llm" else "Hardcoded fallback"
                 st.metric(f"Decision: {label}", f"{dm:.0f} ms")
             st.markdown(f"**Priority:** {last.get('priority', '—')}")
             st.caption(f"*Reasoning:* {last.get('reasoning', '')[:200]}{'…' if len(last.get('reasoning', '')) > 200 else ''}")
@@ -324,7 +324,7 @@ pyttsx3 voice output
             dm = last.get("decision_ms")
             src = last.get("source", "llm")
             if dm is not None:
-                st.caption(f"Decision: {'Fine-tuned MLP' if src == 'finetuned' else 'Base Gemma 3'} — **{dm:.0f} ms**")
+                st.caption(f"Decision: {'Gemma 3:4b (LLM)' if src == 'llm' else 'Hardcoded fallback'} — **{dm:.0f} ms**")
 
 
 if __name__ == "__main__":
