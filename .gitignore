@@ -1,17 +1,9 @@
-# Python-generated files
-__pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
-
 # Virtual environments
 .venv
 venv/
 env/
 
-# Model files (large; regenerate or copy from VM)
+# Model files and Training outputs
 *.gguf
 *.tar.gz
 fieldtalk_agent_gguf_gguf/
@@ -20,21 +12,29 @@ models/
 *.pt
 *.bin
 *.safetensors
+models/gemma3n-lipreader-lora/
+training/checkpoints/
+output*/
+
+# Data and Corpus (Large files)
+data/grid/
+data/grid_dataset_*.jsonl
 
 # Environment / secrets
 .env
 .env.local
 .streamlit/secrets.toml
 
-# IDE / editor
+# IDE / editor / OS
 .idea/
 .vscode/
 *.swp
 *.swo
-
-# OS
 .DS_Store
 Thumbs.db
+__MACOSX/
 
-# Logs
+# Logs and Archives
 *.log
+*.tar
+*.zip

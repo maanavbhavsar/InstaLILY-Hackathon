@@ -223,3 +223,117 @@ streamlit run app.py
 ## Vocabulary
 
 Phrases: stop, start, help, urgent, clear, confirmed, negative, hold, proceed, done, unit down, need part, all clear, stand by, roger, repeat, abort, ready, check, evacuate.
+
+---
+
+## Lip Reading Fine-Tuning (Gemma 3n E4B + LoRA on GRID Corpus)
+
+Beyond the base Ollama-powered lip reading, this project includes a full fine-tuning pipeline to train Gemma 3n E4B on the GRID Audiovisual Speech Corpus — producing a model that can actually read lips from mouth-region frame mosaics.
+
+See [`finetuning/IMPLEMENTATION_PLAN.md`](finetuning/IMPLEMENTATION_PLAN.md) for the full runbook with detailed instructions, test commands, and troubleshooting.
+
+### Architecture
+
+```
+Camera/Video → MediaPipe Face Mesh → Mouth ROI Crop → 12 Sampled Frames → 3×4 Mosaic (400×240) → Fine-Tuned Gemma 3n E4B + LoRA → Transcription
+```
+
+### Quick Start
+
+**1. Data preprocessing (local, CPU-only):**
+
+```bash
+# Install dependencies
+pip install opencv-python-headless mediapipe==0.10.14 numpy Pillow
+
+# Run full pipeline for 1 speaker (~7 min)
+python3 -m finetuning.run_pipeline --speakers s1
+
+# Or for all 5 speakers (~30 min, ~2.1 GB download)
+python3 -m finetuning.run_pipeline --speakers s1 s2 s3 s4 s5
+```
+
+This downloads videos from Zenodo, extracts frames, crops mouth regions with MediaPipe, builds 3x4 mosaics, and creates train/val/test JSONL splits.
+
+**2. Training (RTX 6000 or any GPU with 24+ GB VRAM):**
+
+```bash
+# Prerequisites: accept Gemma license on HuggingFace, then login
+huggingface-cli login
+
+# Install GPU dependencies
+pip install -r training/requirements.txt
+
+# Smoke test (verify everything works)
+python3 training/train.py --max-steps 2 --batch-size 1
+
+# Full training (~1-2 hours on RTX 6000)
+python3 training/train.py
+```
+
+**3. Evaluation:**
+
+```bash
+# Evaluate on test set
+python3 training/evaluate.py --adapter-dir models/gemma3n-lipreader-lora/final-adapter
+
+# Test 4-bit quantized inference (simulates laptop deployment)
+python3 training/evaluate.py --adapter-dir models/gemma3n-lipreader-lora/final-adapter --quantize-4bit
+```
+
+### Project Structure
+
+```
+finetuning/                          # Data preprocessing pipeline
+├── config.py                        # Central configuration (paths, model params, vocabulary)
+├── download_grid.py                 # Download GRID corpus from Zenodo
+├── extract_frames.py                # Video → individual PNG frames
+├── extract_mouth_rois.py            # MediaPipe Face Mesh → mouth ROI crops
+├── parse_alignments.py              # .align file parser (speech boundaries + transcriptions)
+├── build_mosaics.py                 # 12-frame sampling → 3×4 mosaic (400×240)
+├── format_dataset.py                # Build JSONL dataset with train/val/test splits
+├── validate_dataset.py              # Pre-training sanity checks
+├── run_pipeline.py                  # Orchestrate all preprocessing steps
+├── IMPLEMENTATION_PLAN.md           # Full runbook with test commands
+└── LipAgent_Project_Overview (1).md # Original spec document
+
+training/                            # GPU training pipeline
+├── requirements.txt                 # GPU dependencies (torch, transformers, trl, peft, etc.)
+├── setup_env.sh                     # RTX 6000 environment setup
+├── dataset.py                       # Multimodal dataset loader for SFTTrainer
+├── train.py                         # LoRA fine-tuning with SFTTrainer
+└── evaluate.py                      # WER + per-position accuracy evaluation
+
+data/                                # (gitignored) Generated data
+├── grid/raw/{speaker}/*.mpg         # Downloaded GRID videos
+├── grid/frames/{speaker}/{vid}/     # Extracted PNG frames
+├── grid/mouth_rois/{speaker}/{vid}/ # Cropped mouth regions
+├── grid/mosaics/{speaker}/{vid}.jpg # 3×4 mosaic images (400×240)
+├── grid/alignments/{speaker}/*.align# Word-level timing files
+├── grid_dataset_train.jsonl         # Training data
+├── grid_dataset_val.jsonl           # Validation data
+└── grid_dataset_test.jsonl          # Test data
+```
+
+### Model & Training Details
+
+| Property | Value |
+|----------|-------|
+| Base model | Gemma 3n E4B (`google/gemma-3n-E4B-it`) |
+| Fine-tuning method | LoRA (r=16, alpha=32, targets=q/k/v/o_proj) |
+| Training precision | bf16 (full, on 96GB VRAM) |
+| Inference precision | 4-bit quantized (~5-6 GB on laptop) |
+| Dataset | GRID corpus, 5 speakers, ~4000 train / ~500 val / ~500 test |
+| Epochs | 5, batch 8, grad_accum 2, lr 2e-4, cosine schedule |
+| Expected accuracy | 40-60% word-level on seen speakers |
+
+### Pipeline Test Results (s1 speaker, 1000 videos)
+
+| Step | Result | Time |
+|------|--------|------|
+| Download | 1000 videos + 34000 alignments | ~25s |
+| Frame extraction | 74,995 frames (75/video) | 47.6s |
+| Mouth ROI extraction | 99.8% face detection rate | 347.6s |
+| Mosaic building | 1000/1000 built | 0.8s |
+| Dataset formatting | 800 train / 100 val / 100 test | <0.1s |
+| Validation | All samples passed | 0.3s |
